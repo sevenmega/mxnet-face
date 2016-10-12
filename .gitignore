@@ -1,1 +1,3 @@
 model/dlib
+data/*.zip
+data/lfw-align
