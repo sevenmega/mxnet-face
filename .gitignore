@@ -1,3 +1,7 @@
+*.pyc
 model/dlib
 data/*.zip
 data/lfw-align
+data/lfw-feature
+data/classifier
+data/feature
