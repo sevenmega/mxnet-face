@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import time
+import fileinput
 
 import cv2
 import mxnet as mx
@@ -23,32 +24,33 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.naive_bayes import GaussianNB
 
 from lightened_cnn import lightened_cnn_b_feature
+from data import iterImgs
+from align_dlib import AlignDlib
 
 ctx = mx.gpu(0)
 
-def readimg(name, size, ctx):
+def readimg(imgname, size):
+    logging.info("reading {}".format(imgname))
     arr = np.zeros((1, 1, size, size), dtype=float)
-    img = np.expand_dims(cv2.imread(name, 0), axis=0)
+    img = np.expand_dims(cv2.imread(imgname, 0), axis=0)
     arr[0][:] = img/255.0
     return arr
 
-def get_rep(args, imgname):
+def get_rep(args, imgarr, time_measure=False, time_iter=10):
     _, model_args, model_auxs = mx.model.load_checkpoint(args.model_prefix, args.epoch)
     symbol = lightened_cnn_b_feature()
-    logging.info("processing {}".format(imgname))
-    model_args['data'] = mx.nd.array(readimg(imgname, args.size, ctx), ctx)
+    model_args['data'] = mx.nd.array(imgarr, ctx)
     exector = symbol.bind(ctx, model_args ,args_grad=None, grad_req="null", aux_states=model_auxs)
     exector.forward(is_train=False)
     exector.outputs[0].wait_to_read()
     output = exector.outputs[0].asnumpy()
-    #print output[0]
-    #print output[0].shape
-    #np.savetxt("output_savetxt.csv", output[0], delimiter=",") # in col?
-    #output[0].tofile('output_tofile.csv',sep=',',format='%10.10f')
+    if time_measure:
+        start = time.time()
+        for index in range(time_iter):
+            exector.forward(is_train=False)
+            exector.outputs[0].wait_to_read()
+        print("forward {} times took {} seconds, avg {}.".format(time_iter, time.time() - start, (time.time() - start)/time_iter))
     return output
-
-from data import iterImgs
-import fileinput
 
 def get_reps(args):
     imgs = list(iterImgs(args.aligned_prefix))
@@ -66,7 +68,7 @@ def get_reps(args):
         print img.name
         print img.path
         #reps.append(get_rep(args, img.path))
-        get_rep(args, img.path).tofile('tmp.csv',sep=',',format='%10.10f')
+        get_rep(args, readimg(img.path, args.size)).tofile('tmp.csv',sep=',',format='%10.10f')
         with open(reps_file, 'a') as fout:
             fin = fileinput.input('tmp.csv')
             for line in fin:
@@ -151,7 +153,7 @@ def infer(args, imgname):
     with open(args.classifier_model, 'r') as f:
         (le, clf) = pickle.load(f)
 
-    rep = get_rep(args, imgname)
+    rep = get_rep(args, readimg(imgname, args.size))
     start = time.time()
     predictions = clf.predict_proba(rep).ravel()
     maxI = np.argmax(predictions)
@@ -163,18 +165,144 @@ def infer(args, imgname):
         dist = np.linalg.norm(rep - clf.means_[maxI])
         print("  + Distance from the mean: {}".format(dist))
 
+def detect_frame(args, framegray, align):
+    start = time.time()
+    # Get the largest face bounding box
+    # bb = align.getLargestFaceBoundingBox(framegray) #Bounding box
+
+    # Get all bounding boxes
+    bb = align.getAllFaceBoundingBoxes(framegray)
+    print("  Face detection took {} seconds.".format(time.time() - start))
+    if bb is None:
+        # raise Exception("Unable to find a face: {}".format(imgPath))
+        return None
+    print("  Face detection got {} faces.".format(len(bb)))
+    return bb
+
+def align_frame(args, framegray, align, bb):
+    start = time.time()
+    alignedFaces = []
+    for box in bb:
+        alignedFaces.append(
+            align.align(
+                args.size,
+                framegray,
+                box,
+                landmarkIndices=AlignDlib.OUTER_EYES_AND_NOSE))
+    print("  Alignment took {} seconds.".format(time.time() - start))
+    if alignedFaces is None:
+        raise Exception("Unable to align the frame")
+        return None
+    print("  Face align {} faces.".format(len(alignedFaces)))
+    return alignedFaces
+
+def get_reps_frame(args, alignedFaces):
+    start = time.time()
+    reps = []
+    for alignedFace in alignedFaces:
+        img = np.expand_dims(alignedFace, axis=0)
+        arr = np.zeros((1, 1, args.size, args.size), dtype=float)
+        arr[0][:] = img/255.0
+        #reps.append(net.forward(alignedFace))
+        reps.append(get_rep(args, arr))
+    print("  Neural network forward pass took {} seconds.".format(time.time() - start))
+    return reps
+
+def infer_frame(args, framegray, align):
+    with open(args.classifier_model, 'r') as f:
+        (le, clf) = pickle.load(f)
+
+    bb = detect_frame(args, framegray, align)
+    if bb == None:
+        return None
+    alignedFaces = align_frame(args, framegray, align, bb)
+    if alignedFaces == None:
+        return None
+    reps = get_reps_frame(args, alignedFaces)
+    persons = []
+    confidences = []
+    for rep in reps:
+        try:
+            rep = rep.reshape(1, -1)
+        except:
+            print "No Face detected"
+            return (None, None)
+        start = time.time()
+        predictions = clf.predict_proba(rep).ravel()
+        # print predictions
+        maxI = np.argmax(predictions)
+        # max2 = np.argsort(predictions)[-3:][::-1][1]
+        persons.append(le.inverse_transform(maxI))
+        # print str(le.inverse_transform(max2)) + ": "+str( predictions [max2])
+        # ^ prints the second prediction
+        confidences.append(predictions[maxI])
+        #if args.verbose:
+        print("  Prediction took {} seconds.".format(time.time() - start))
+            #pass
+        # print("Predict {} with {:.2f} confidence.".format(person, confidence))
+        if isinstance(clf, GMM):
+            dist = np.linalg.norm(rep - clf.means_[maxI])
+            print("  + Distance from the mean: {}".format(dist))
+            pass
+    return (persons, confidences)
+
+def infer_camera(args):
+    # Capture device. Usually 0 will be webcam and 1 will be usb cam.
+    video_capture = cv2.VideoCapture(0)
+    #video_capture.set(3, 320)
+    #video_capture.set(4, 240)
+    align = AlignDlib(args.dlib_face_predictor)
+
+    confidenceList = []
+    while True:
+        start = time.time()
+        ret, frame = video_capture.read()
+        framegray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        print("Capture took {} seconds.".format(time.time() - start))
+        print("  Frame gray shape {}".format(framegray.shape))
+
+        start = time.time()
+        persons, confidences = infer_frame(args, framegray, align)
+        print("  Infer took {} seconds.".format(time.time() - start))
+        print "P: " + str(persons) + " C: " + str(confidences)
+        try:
+            # append with two floating point precision
+            confidenceList.append('%.2f' % confidences[0])
+        except:
+            # If there is no face detected, confidences matrix will be empty.
+            # We can simply ignore it.
+            pass
+
+        for i, c in enumerate(confidences):
+            if c <= args.threshold:  # 0.5 is kept as threshold for known face.
+                persons[i] = "_unknown"
+        # Print the person name and conf value on the frame
+        cv2.putText(frame, "P: {} C: {}".format(persons, confidences),
+                    (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.imshow('', frame)
+        # quit the program on the press of key 'q'
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+    # When everything is done, release the capture
+    video_capture.release()
+    cv2.destroyAllWindows()
+
 # tp align
-# openface/util/align-dlib.py ./raw align outerEyesAndNose ./aligned --size 128
+# ./align-dlib.py ./raw align outerEyesAndNose ./aligned --size 128
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--singlerep', type=int, default=0,
                         help='Do single image rep')
+    parser.add_argument('--time', type=int, default=0,
+                        help='Do time measure on single image rep')
     parser.add_argument('--feature', type=int, default=0,
                         help='Do feature extraction')
     parser.add_argument('--train', type=int, default=0,
                         help='Do train')
     parser.add_argument('--infer', type=int, default=0,
                         help='Do infer')
+    parser.add_argument('--camera', type=int, default=0,
+                        help='Do infer with camera input')
     parser.add_argument('--singleimg', type=str, default="./test.png",
                         help='Location of a single test image file')
     parser.add_argument('--suffix', type=str, default="png",
@@ -193,7 +321,10 @@ def main():
                         help='The classifier dir')
     parser.add_argument('--classifier-model', default='./classifier/classifier.pkl',
                         help='The classifier model')
+    parser.add_argument('--dlib-face-predictor', default='../model/dlib/shape_predictor_68_face_landmarks.dat',
+                        help='The dlib face predictor')
     parser.add_argument('--ldaDim', type=int, default=-1)
+    parser.add_argument('--threshold', type=float, default=0.5)
     parser.add_argument(
         '--classifier',
         type=str,
@@ -213,7 +344,13 @@ def main():
         if not os.path.isfile(args.singleimg):
             logging.info("Test Image not present.")
             sys.exit(-1)
-        get_rep(args, args.singleimg)
+        get_rep(args, readimg(args.singleimg, args.size))
+        sys.exit(0)
+    if args.time == 1:
+        if not os.path.isfile(args.singleimg):
+            logging.info("Test Image not present.")
+            sys.exit(-1)
+        get_rep(args, readimg(args.singleimg, args.size), True, 20)
         sys.exit(0)
     if args.feature == 1:
         if not os.path.exists(args.aligned_prefix):
@@ -239,6 +376,12 @@ def main():
             logging.info("Test Image not present.")
             sys.exit(-1)
         infer(args, args.singleimg)
+        sys.exit(0)
+    if args.camera == 1:
+        if not os.path.isfile(args.classifier_model):
+            logging.info("Error: classifier-model not present.")
+            sys.exit(-1)
+        infer_camera(args)
         sys.exit(0)
 
 if __name__ == '__main__':
