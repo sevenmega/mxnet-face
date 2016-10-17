@@ -1,5 +1,7 @@
+#include <ctime>
 #include <dlib/opencv.h>
 #include <opencv2/highgui/highgui.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
 #include <dlib/image_processing/frontal_face_detector.h>
 #include <dlib/image_processing/render_face_detections.h>
 #include <dlib/image_processing.h>
@@ -7,6 +9,9 @@
 
 using namespace dlib;
 using namespace std;
+
+// WR to speedup
+#define FACE_DOWNSAMPLE_RATIO 2
 
 int main(int argc, char** argv)
 {
@@ -20,6 +25,7 @@ int main(int argc, char** argv)
         }
 
         image_window win;
+        clock_t start;
 
         // Load face detection and pose estimation models.
         frontal_face_detector detector = get_frontal_face_detector();
@@ -39,19 +45,47 @@ int main(int argc, char** argv)
             // contain dangling pointers.  This basically means you shouldn't modify temp
             // while using cimg.
             cv_image<bgr_pixel> cimg(temp);
+#ifdef FACE_DOWNSAMPLE_RATIO
+            cv::Mat temp_small;
+            cv::resize(temp, temp_small, cv::Size(),
+                1.0/FACE_DOWNSAMPLE_RATIO, 1.0/FACE_DOWNSAMPLE_RATIO);
+            cv_image<bgr_pixel> cimg_small(temp_small);
+#endif
 
             // Detect faces
+            start = clock();
+#ifdef FACE_DOWNSAMPLE_RATIO
+            std::vector<rectangle> faces_small = detector(cimg_small);
+            std::vector<rectangle> faces;
+            for (unsigned long i = 0; i < faces_small.size(); ++i) {
+                rectangle r(
+                    (long)(faces_small[i].left() * FACE_DOWNSAMPLE_RATIO),
+                    (long)(faces_small[i].top() * FACE_DOWNSAMPLE_RATIO),
+                    (long)(faces_small[i].right() * FACE_DOWNSAMPLE_RATIO),
+                    (long)(faces_small[i].bottom() * FACE_DOWNSAMPLE_RATIO)
+                );
+                faces.push_back(r);
+            }
+#else
             std::vector<rectangle> faces = detector(cimg);
+#endif
+            cout << "Detector took " << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+
             // Find the pose of each face.
+            start = clock();
             std::vector<full_object_detection> shapes;
-            for (unsigned long i = 0; i < faces.size(); ++i)
-               shapes.push_back(pose_model(cimg, faces[i]));
+            for (unsigned long i = 0; i < faces.size(); ++i) {
+                shapes.push_back(pose_model(cimg, faces[i]));
+            }
+            cout << "Predictor took " << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
 
             // Display it all on the screen
+            start = clock();
             win.clear_overlay();
             win.set_image(cimg);
             win.add_overlay(faces);
             win.add_overlay(render_face_detections(shapes));
+            cout << "Display took " << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
         }
     }
     catch(serialization_error& e)
