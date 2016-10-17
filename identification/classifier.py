@@ -200,6 +200,7 @@ def get_reps_frame(args, alignedFaces):
     start = time.time()
     reps = []
     for alignedFace in alignedFaces:
+        # cv2.imshow('face', alignedFace)
         img = np.expand_dims(alignedFace, axis=0)
         arr = np.zeros((1, 1, args.size, args.size), dtype=float)
         arr[0][:] = img/255.0
