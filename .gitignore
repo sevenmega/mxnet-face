@@ -6,3 +6,4 @@ data/lfw-feature
 data/classifier
 data/feature
 src/cam
+src/image-classification-predict
