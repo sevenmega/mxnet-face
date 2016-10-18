@@ -379,6 +379,8 @@ int main(int argc, char** argv)
             if (shapes.size() == 0) {
                 continue;
             }
+
+            start = clock();
 #if 0
             // We can also extract copies of each face that are cropped, rotated upright,
             // and scaled to a standard size as shown here:
@@ -407,6 +409,8 @@ int main(int argc, char** argv)
             cv_image<bgr_pixel> cimg_face_align(face_warp);
             win_faces.set_image(cimg_face_align);
 #endif
+            cout << "Align took "
+               << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
 
             GetImage(face_warp, mx_input_data.data());
 #if 0
@@ -414,7 +418,10 @@ int main(int argc, char** argv)
             std::string test_file = std::string("../data/my-align/larry/image-10.png");
             GetImageFile(test_file, mx_input_data.data());
 #endif
+            start = clock();
             mx_forward();
+            cout << "Forward took "
+               << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
 #if 0
             cout << "output size = " << mx_output_data.size() << endl;
             for (int i = 0; i < mx_output_data.size(); i++) {
