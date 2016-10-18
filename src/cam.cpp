@@ -59,6 +59,9 @@ static int OUTER_EYES_AND_NOSE[] = {36, 45, 33};
 //#define USE_CV_FACE_DETECTION
 #define USE_DLIB_FACE_DETECTION
 
+#define USE_CV_DISPLAY
+//#define USE_DLIB_DISPLAY
+
 // Read file to buffer
 class BufferFile {
  public :
@@ -515,6 +518,38 @@ static int find_nearest_face_substract_norm(void)
     return best_id;
 }
 
+#ifdef USE_CV_DISPLAY
+void draw_polyline(cv::Mat &img, const dlib::full_object_detection& d, const int start, const int end, bool isClosed = false)
+{
+    std::vector <cv::Point> points;
+    for (int i = start; i <= end; ++i)
+    {
+        points.push_back(cv::Point(d.part(i).x(), d.part(i).y()));
+    }
+    cv::polylines(img, points, isClosed, cv::Scalar(0,0,255), 1, 16);
+}
+
+void render_face (cv::Mat &img, const dlib::full_object_detection& d)
+{
+    DLIB_CASSERT
+    (
+     d.num_parts() == 68,
+     "\n\t Invalid inputs were given to this function. "
+     << "\n\t d.num_parts():  " << d.num_parts()
+     );
+
+    draw_polyline(img, d, 0, 16);           // Jaw line
+    draw_polyline(img, d, 17, 21);          // Left eyebrow
+    draw_polyline(img, d, 22, 26);          // Right eyebrow
+    draw_polyline(img, d, 27, 30);          // Nose bridge
+    draw_polyline(img, d, 30, 35, true);    // Lower nose
+    draw_polyline(img, d, 36, 41, true);    // Left eye
+    draw_polyline(img, d, 42, 47, true);    // Right Eye
+    draw_polyline(img, d, 48, 59, true);    // Outer lip
+    draw_polyline(img, d, 60, 67, true);    // Inner lip
+}
+#endif
+
 int main(int argc, char** argv)
 {
     try
@@ -526,7 +561,13 @@ int main(int argc, char** argv)
             return 1;
         }
 
+#ifdef USE_DLIB_DISPLAY
         image_window win, win_faces;
+#endif
+#ifdef USE_CV_DISPLAY
+        cv::namedWindow( "Cam");
+        cv::namedWindow( "Face");
+#endif
         clock_t start;
         cv::Mat frame;
 
@@ -551,8 +592,14 @@ int main(int argc, char** argv)
         create_face_db();
 
         // Grab and process frames until the main window is closed by the user.
-        while(!win.is_closed())
+        while(1)
         {
+#ifdef USE_DLIB_DISPLAY
+            if (win.is_closed()) {
+                break;
+            }
+#endif
+
             // Grab a frame
             cap >> frame;
             if (frame.empty()) {
@@ -560,8 +607,8 @@ int main(int argc, char** argv)
                 break;
             }
 
-#ifdef USE_CV_FACE_DETECTION
             std::vector<cv::Rect> cv_faces;
+#ifdef USE_CV_FACE_DETECTION
             cv::Mat frame_gray;
             cv::cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
             cv::equalizeHist(frame_gray, frame_gray);
@@ -625,6 +672,12 @@ int main(int argc, char** argv)
                      << faces[i].top() << ", "
                      << faces[i].right() << ", "
                      << faces[i].bottom() << "]" << endl;
+                cv::Rect cv_face(
+                    faces[i].left(), faces[i].top(),
+                    faces[i].right() - faces[i].left(),
+                    faces[i].bottom() - faces[i].top()
+                );
+                cv_faces.push_back(cv_face);
             }
 #else /* not USE_DLIB_FACE_DETECTION */
             // convert CV faces into dlib faces
@@ -706,11 +759,12 @@ int main(int argc, char** argv)
             int id0 = find_nearest_face();
             int id1 = find_nearest_face_norm();
             int id2 = find_nearest_face_substract_norm();
-            cout << "Best Match is " << id1 << " name " << name[id1] << endl;
             int id = id1;
+            cout << "Best Match is " << id << " name " << name[id] << endl;
 
-            // Display it all on the screen
             start = clock();
+#ifdef USE_DLIB_DISPLAY
+            // Display it all on the screen
             win.clear_overlay();
             win.set_image(cimg);
             win.add_overlay(faces);
@@ -720,6 +774,17 @@ int main(int argc, char** argv)
             win_faces.set_image(cimg_face_align);
             const rectangle r;
             win_faces.add_overlay(r, rgb_pixel(255,0,0), name[id]);
+#endif
+#ifdef USE_CV_DISPLAY
+            render_face( frame, shapes[0] );
+            cv::rectangle( frame, cv_faces[0], cv::Scalar(0,255,0), 1, 16 );
+            cv::imshow( "Cam", frame );
+            cv::putText( face_warp, name[id], cv::Point(10, 80),
+                cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(255,255,0), 2 );
+            cv::imshow( "Face", face_warp );
+            if((cv::waitKey(1) & 0xFF) == 'q')
+                break;
+#endif
             cout << "Display took "
                 << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
         }
@@ -736,5 +801,8 @@ int main(int argc, char** argv)
         cout << e.what() << endl;
     }
     mx_cleanup();
+#ifdef USE_CV_DISPLAY
+    cv::destroyAllWindows();
+#endif
 }
 
