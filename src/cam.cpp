@@ -7,6 +7,7 @@
 #include <dlib/image_processing/render_face_detections.h>
 #include <dlib/image_processing.h>
 #include <dlib/gui_widgets.h>
+#include <mxnet/c_predict_api.h>
 
 using namespace dlib;
 using namespace std;
@@ -57,6 +58,180 @@ static int OUTER_EYES_AND_NOSE[] = {36, 45, 33};
 //#define USE_CV_FACE_DETECTION
 #define USE_DLIB_FACE_DETECTION
 
+// Read file to buffer
+class BufferFile {
+ public :
+    std::string file_path_;
+    int length_;
+    char* buffer_;
+
+    explicit BufferFile(std::string file_path)
+    :file_path_(file_path) {
+
+        std::ifstream ifs(file_path.c_str(), std::ios::in | std::ios::binary);
+        if (!ifs) {
+            std::cerr << "Can't open the file. Please check " << file_path << ". \n";
+            assert(false);
+        }
+
+        ifs.seekg(0, std::ios::end);
+        length_ = ifs.tellg();
+        ifs.seekg(0, std::ios::beg);
+        std::cout << file_path.c_str() << " ... "<< length_ << " bytes\n";
+
+        buffer_ = new char[sizeof(char) * length_];
+        ifs.read(buffer_, length_);
+        ifs.close();
+    }
+
+    int GetLength() {
+        return length_;
+    }
+    char* GetBuffer() {
+        return buffer_;
+    }
+
+    ~BufferFile() {
+        delete[] buffer_;
+        buffer_ = NULL;
+    }
+};
+
+static PredictorHandle mx_predictor = 0;
+static int mx_input_size = 0;
+static int mx_output_size = 0;
+static std::vector<mx_float> mx_input_data;
+static std::vector<float> mx_output_data;
+
+static void mx_setup(void)
+{
+    // Models path for your model, you have to modify it
+    BufferFile json_data("../model/lightened_cnn/lightened_cnn-symbol.json");
+    BufferFile param_data("../model/lightened_cnn/lightened_cnn-0166_cpu.params");
+
+    // Parameters
+    int dev_type = 1;  // 1: cpu, 2: gpu
+    int dev_id = 0;  // arbitrary.
+    mx_uint num_input_nodes = 1;  // 1 for feedforward
+    const char* input_key[1] = {"data"};
+    const char** input_keys = input_key;
+    mx_uint num_output_nodes = 1;
+    const char* output_key[1] = {"drop1"};
+    const char** output_keys = output_key;
+
+    // Image size and channels
+    int width = 128;
+    int height = 128;
+    int channels = 1;
+
+    const mx_uint input_shape_indptr[2] = { 0, 4 };
+    // ( trained_width, trained_height, channel, num)
+    const mx_uint input_shape_data[4] = { 1,
+                                        static_cast<mx_uint>(channels),
+                                        static_cast<mx_uint>(width),
+                                        static_cast<mx_uint>(height) };
+
+    //-- Create Predictor
+    MXPredCreatePartialOut((const char*)json_data.GetBuffer(),
+                 (const char*)param_data.GetBuffer(),
+                 static_cast<size_t>(param_data.GetLength()),
+                 dev_type,
+                 dev_id,
+                 num_input_nodes,
+                 input_keys,
+                 input_shape_indptr,
+                 input_shape_data,
+                 num_output_nodes,
+                 output_keys,
+                 &mx_predictor);
+
+    mx_input_size = width * height * channels;
+    mx_input_data = std::vector<mx_float>(mx_input_size);
+
+    mx_uint output_index = 0;
+
+    mx_uint *shape = 0;
+    mx_uint shape_len;
+
+    //-- Get Output Size
+    MXPredGetOutputShape(mx_predictor, output_index, &shape, &shape_len);
+
+    mx_output_size = 1;
+    for (mx_uint i = 0; i < shape_len; ++i)
+        mx_output_size *= shape[i];
+    mx_output_data = std::vector<float>(mx_output_size);
+}
+
+static void mx_cleanup(void)
+{
+    // Release Predictor
+    MXPredFree(mx_predictor);
+}
+
+static void GetImageFile(const std::string image_file, mx_float* image_data) {
+#if 1
+    cv::Mat im = cv::imread(image_file, 0);  // 0 is Gray
+#else
+    cv::Mat im_color = cv::imread(image_file, 1);
+    cv::Mat im;
+    cv::cvtColor(im_color, im, cv::COLOR_BGR2GRAY);
+#endif
+
+    if (im.empty()) {
+        std::cerr << "Can't open the image. Please check " << image_file << ". \n";
+        assert(false);
+    }
+
+    int size = im.rows * im.cols;
+
+#if 0
+    cout << "image size = " << size << endl;
+    cout << "im = "<< endl << " "  << im << endl << endl;
+#endif
+
+    mx_float* ptr_image = image_data;
+
+    for (int i = 0; i < im.rows; i++) {
+        for (int j = 0; j < im.cols; j++) {
+            image_data[i * im.cols + j] = *im.ptr<uchar>(i, j)/255.0;
+        }
+    }
+}
+
+static void GetImage(const cv::Mat im_color, mx_float* image_data) {
+    cv::Mat im;
+    cv::cvtColor(im_color, im, cv::COLOR_BGR2GRAY);
+
+    int size = im.rows * im.cols;
+
+#if 0
+    cout << "image size = " << size << endl;
+    cout << "im = "<< endl << " "  << im << endl << endl;
+#endif
+
+    mx_float* ptr_image = image_data;
+
+    for (int i = 0; i < im.rows; i++) {
+        for (int j = 0; j < im.cols; j++) {
+            image_data[i * im.cols + j] = *im.ptr<uchar>(i, j)/255.0;
+        }
+    }
+}
+
+static void mx_forward(void)
+{
+    //-- Set Input Image
+    MXPredSetInput(mx_predictor, "data", mx_input_data.data(), mx_input_size);
+
+    //-- Do Predict Forward
+    MXPredForward(mx_predictor);
+
+    //-- Get Output Result
+    mx_uint output_index = 0;
+
+    MXPredGetOutput(mx_predictor, output_index, mx_output_data.data(), mx_output_size);
+}
+
 int main(int argc, char** argv)
 {
     try
@@ -88,6 +263,8 @@ int main(int argc, char** argv)
 #endif
         shape_predictor pose_model;
         deserialize(argv[1]) >> pose_model;
+
+        mx_setup();
 
         // Grab and process frames until the main window is closed by the user.
         while(!win.is_closed())
@@ -230,6 +407,21 @@ int main(int argc, char** argv)
             cv_image<bgr_pixel> cimg_face_align(face_warp);
             win_faces.set_image(cimg_face_align);
 #endif
+
+            GetImage(face_warp, mx_input_data.data());
+#if 0
+            //-- Read Image Data from file
+            std::string test_file = std::string("../data/my-align/larry/image-10.png");
+            GetImageFile(test_file, mx_input_data.data());
+#endif
+            mx_forward();
+#if 0
+            cout << "output size = " << mx_output_data.size() << endl;
+            for (int i = 0; i < mx_output_data.size(); i++) {
+                cout << mx_output_data[i] << " ";
+            }
+            cout << endl;
+#endif
         }
     }
     catch(serialization_error& e)
@@ -243,5 +435,6 @@ int main(int argc, char** argv)
     {
         cout << e.what() << endl;
     }
+    mx_cleanup();
 }
 
