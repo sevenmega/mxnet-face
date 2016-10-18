@@ -29,6 +29,8 @@
 #include <string>
 #include <vector>
 
+using namespace std;
+
 // Read file to buffer
 class BufferFile {
  public :
@@ -110,6 +112,30 @@ void GetMeanFile(const std::string image_file, mx_float* image_data,
     }
 }
 
+void GetImageFile(const std::string image_file, mx_float* image_data) {
+    cv::Mat im = cv::imread(image_file, 0);
+
+    if (im.empty()) {
+        std::cerr << "Can't open the image. Please check " << image_file << ". \n";
+        assert(false);
+    }
+
+    int size = im.rows * im.cols;
+
+#if 0
+    cout << "image size = " << size << endl;
+    cout << "im = "<< endl << " "  << im << endl << endl;
+#endif
+
+    mx_float* ptr_image = image_data;
+
+    for (int i = 0; i < im.rows; i++) {
+        for (int j = 0; j < im.cols; j++) {
+            image_data[i * im.cols + j] = *im.ptr<uchar>(i, j)/255.0;
+        }
+    }
+}
+
 // LoadSynsets
 // Code from : https://github.com/pertusa/mxnet_predict_cc/blob/master/mxnet_predict.cc
 std::vector<std::string> LoadSynset(const char *filename) {
@@ -165,8 +191,8 @@ int main(int argc, char* argv[]) {
     test_file = std::string(argv[1]);
 
     // Models path for your model, you have to modify it
-    BufferFile json_data("model/Inception/Inception_BN-symbol.json");
-    BufferFile param_data("model/Inception/Inception_BN-0039.params");
+    BufferFile json_data("../model/lightened_cnn/lightened_cnn-symbol.json");
+    BufferFile param_data("../model/lightened_cnn/lightened_cnn-0166_cpu.params");
 
     // Parameters
     int dev_type = 1;  // 1: cpu, 2: gpu
@@ -174,11 +200,14 @@ int main(int argc, char* argv[]) {
     mx_uint num_input_nodes = 1;  // 1 for feedforward
     const char* input_key[1] = {"data"};
     const char** input_keys = input_key;
+    mx_uint num_output_nodes = 1;
+    const char* output_key[1] = {"drop1"};
+    const char** output_keys = output_key;
 
     // Image size and channels
-    int width = 224;
-    int height = 224;
-    int channels = 3;
+    int width = 128;
+    int height = 128;
+    int channels = 1;
 
     const mx_uint input_shape_indptr[2] = { 0, 4 };
     // ( trained_width, trained_height, channel, num)
@@ -189,7 +218,18 @@ int main(int argc, char* argv[]) {
     PredictorHandle out = 0;  // alias for void *
 
     //-- Create Predictor
-    MXPredCreate((const char*)json_data.GetBuffer(),
+    //MXPredCreate((const char*)json_data.GetBuffer(),
+    //             (const char*)param_data.GetBuffer(),
+    //             static_cast<size_t>(param_data.GetLength()),
+    //             dev_type,
+    //             dev_id,
+    //             num_input_nodes,
+    //             input_keys,
+    //             input_shape_indptr,
+    //             input_shape_data,
+    //             &out);
+
+    MXPredCreatePartialOut((const char*)json_data.GetBuffer(),
                  (const char*)param_data.GetBuffer(),
                  static_cast<size_t>(param_data.GetLength()),
                  dev_type,
@@ -198,14 +238,26 @@ int main(int argc, char* argv[]) {
                  input_keys,
                  input_shape_indptr,
                  input_shape_data,
+                 num_output_nodes,
+                 output_keys,
                  &out);
 
     // Just a big enough memory 1000x1000x3
     int image_size = width * height * channels;
     std::vector<mx_float> image_data = std::vector<mx_float>(image_size);
 
-    //-- Read Mean Data
-    GetMeanFile(test_file, image_data.data(), channels, cv::Size(width, height));
+    //-- Read Image Data
+    GetImageFile(test_file, image_data.data());
+
+#if 0
+    cout << "input size = " << image_data.size() << endl;
+    for (int i = 0; i < image_data.size(); i++) {
+        if ((i > 10) && (i + 10 < image_data.size()))
+            continue;
+        cout << image_data[i] << " ";
+    }
+    cout << endl;
+#endif
 
     //-- Set Input Image
     MXPredSetInput(out, "data", image_data.data(), image_size);
@@ -231,11 +283,19 @@ int main(int argc, char* argv[]) {
     // Release Predictor
     MXPredFree(out);
 
+#if 0
+    cout << "output size = " << data.size() << endl;
+    for (int i = 0; i < data.size(); i++) {
+        cout << data[i] << " ";
+    }
+    cout << endl;
+#endif
+
     // Synset path for your model, you have to modify it
-    std::vector<std::string> synset = LoadSynset("model/Inception/synset.txt");
+    //std::vector<std::string> synset = LoadSynset("model/Inception/synset.txt");
 
     //-- Print Output Data
-    PrintOutputResult(data, synset);
+    //PrintOutputResult(data, synset);
 
     return 0;
 }

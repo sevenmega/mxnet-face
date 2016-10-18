@@ -33,6 +33,8 @@ def readimg(imgname, size):
     logging.info("reading {}".format(imgname))
     arr = np.zeros((1, 1, size, size), dtype=float)
     img = np.expand_dims(cv2.imread(imgname, 0), axis=0)
+    # print("img shape {}".format(img.shape))
+    # print img
     arr[0][:] = img/255.0
     return arr
 
@@ -40,10 +42,14 @@ def get_rep(args, imgarr, time_measure=False, time_iter=10):
     _, model_args, model_auxs = mx.model.load_checkpoint(args.model_prefix, args.epoch)
     symbol = lightened_cnn_b_feature()
     model_args['data'] = mx.nd.array(imgarr, ctx)
+    # print("input shape {}".format(imgarr.shape))
+    # print imgarr
     exector = symbol.bind(ctx, model_args ,args_grad=None, grad_req="null", aux_states=model_auxs)
     exector.forward(is_train=False)
     exector.outputs[0].wait_to_read()
     output = exector.outputs[0].asnumpy()
+    # print("output shape {}".format(output.shape))
+    # print output[0]
     if time_measure:
         start = time.time()
         for index in range(time_iter):
