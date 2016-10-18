@@ -372,6 +372,45 @@ static float face_2[] = {
   1.83290851,  0.41971231,  2.14605141,  0.23919784};
 
 static std::vector<std::vector<float> > rep_db;
+static std::vector<std::vector<float> > rep_db_norm;
+
+static void calc_norm(std::vector<float> &in, std::vector<float> &out)
+{
+    double sum = 0.0f;
+	for (std::vector<float>::iterator it = in.begin(); it != in.end(); ++it) {
+        sum += pow(*it, 2);
+    }
+    double scale = 1/sqrt(sum);
+	for (std::vector<float>::iterator it = in.begin(); it != in.end(); ++it) {
+        sum += pow(*it, 2);
+    }
+    std::vector<float>::iterator it_out= out.begin();
+	for (std::vector<float>::iterator it = in.begin(); it != in.end(); ++it) {
+        *it_out = *it * scale;
+        ++it_out;
+    }
+}
+
+static double calc_dis(std::vector<float> &A, std::vector<float> &B)
+{
+    double sum = 0.0f;
+    std::vector<float>::iterator it_B = B.begin();
+    for (std::vector<float>::iterator it_A = A.begin(); it_A != A.end(); ++it_A) {
+        sum += (*it_A) * (*it_B);
+        ++it_B;
+    }
+    return sum;
+}
+
+static double calc_norm_value(std::vector<float> &in)
+{
+    double sum = 0.0f;
+	for (std::vector<float>::iterator it = in.begin(); it != in.end(); ++it) {
+        sum += pow(*it, 2);
+    }
+    return sqrt(sum);
+}
+
 static void create_face_db(void)
 {
 	std::vector<float> tmp_0 (face_0, face_0 + 256 );
@@ -380,11 +419,20 @@ static void create_face_db(void)
     rep_db.push_back(tmp_1);
 	std::vector<float> tmp_2 (face_2, face_2 + 256 );
     rep_db.push_back(tmp_2);
+
+	std::vector<float> tmp_norm_0(256);
+    calc_norm(tmp_0, tmp_norm_0);
+    rep_db_norm.push_back(tmp_norm_0);
+	std::vector<float> tmp_norm_1(256);
+    calc_norm(tmp_1, tmp_norm_1);
+    rep_db_norm.push_back(tmp_norm_1);
+	std::vector<float> tmp_norm_2(256);
+    calc_norm(tmp_2, tmp_norm_2);
+    rep_db_norm.push_back(tmp_norm_2);
 }
 
 static void find_nearest_face(void)
 {
-    // dis = np.dot(output[0], output[1])/np.linalg.norm(output[0])/np.linalg.norm(output[1])
     for (std::vector< std::vector<float> >::iterator it = rep_db.begin(); it != rep_db.end(); ++it) {
 #if 0
         cout << "face = " << it->size() << endl;
@@ -397,6 +445,40 @@ static void find_nearest_face(void)
         cout << "dis = " << dis << endl;
     }
 }
+
+static void find_nearest_face_norm(void)
+{
+    // dis = np.dot(output[0], output[1])/np.linalg.norm(output[0])/np.linalg.norm(output[1])
+    for (std::vector< std::vector<float> >::iterator it = rep_db_norm.begin(); it != rep_db_norm.end(); ++it) {
+#if 0
+        cout << "face_norm = " << it->size() << endl;
+        for (std::vector<float>::iterator iit = it->begin(); iit != it->end(); ++iit) {
+            cout << *iit << " ";
+        }
+        cout << endl;
+#endif
+        std::vector<float> output_norm(256);
+        calc_norm(mx_output_data, output_norm);
+        double dis = calc_dis(output_norm, *it);
+        cout << "dis_1 = " << dis << endl;
+    }
+}
+
+static void find_nearest_face_substract_norm(void)
+{
+    std::vector<float> diff(256);
+    // dist = np.linalg.norm(rep - clf.means_[maxI])
+    for (std::vector< std::vector<float> >::iterator it = rep_db_norm.begin(); it != rep_db_norm.end(); ++it) {
+        //diff = mx_output_data - *it;
+        std::set_difference(
+            mx_output_data.begin(), mx_output_data.end(),
+            (*it).begin(), (*it).end(),
+            std::back_inserter( diff ));
+        double dis = calc_norm_value(diff);
+        cout << "dis_2 = " << dis << endl;
+    }
+}
+
 
 int main(int argc, char** argv)
 {
@@ -598,6 +680,8 @@ int main(int argc, char** argv)
 #endif
 
             find_nearest_face();
+            find_nearest_face_norm();
+            find_nearest_face_substract_norm();
         }
     }
     catch(serialization_error& e)
