@@ -10,7 +10,14 @@
 #include <mxnet/c_predict_api.h>
 #include <numeric>
 
-using namespace dlib;
+/*
+ * Config
+ */
+#define HAVE_OPENCV  /* this is must */
+#define HAVE_DLIB
+#define HAVE_CCV
+#define HAVE_MXNET
+
 using namespace std;
 
 static float face_align_template[][2] = {
@@ -59,8 +66,8 @@ static int OUTER_EYES_AND_NOSE[] = {36, 45, 33};
 //#define USE_CV_FACE_DETECTION
 #define USE_DLIB_FACE_DETECTION
 
-#define USE_CV_DISPLAY
-//#define USE_DLIB_DISPLAY
+//#define USE_CV_DISPLAY
+#define USE_DLIB_DISPLAY
 
 // Read file to buffer
 class BufferFile {
@@ -529,7 +536,7 @@ void draw_polyline(cv::Mat &img, const dlib::full_object_detection& d, const int
     cv::polylines(img, points, isClosed, cv::Scalar(0,0,255), 1, 16);
 }
 
-void render_face (cv::Mat &img, const dlib::full_object_detection& d)
+void render_face(cv::Mat &img, const dlib::full_object_detection& d)
 {
     DLIB_CASSERT
     (
@@ -562,7 +569,7 @@ int main(int argc, char** argv)
         }
 
 #ifdef USE_DLIB_DISPLAY
-        image_window win, win_faces;
+        dlib::image_window win, win_faces;
 #endif
 #ifdef USE_CV_DISPLAY
         cv::namedWindow( "Cam");
@@ -583,10 +590,10 @@ int main(int argc, char** argv)
 
 #ifdef USE_DLIB_FACE_DETECTION
         // Load face detection and pose estimation models.
-        frontal_face_detector detector = get_frontal_face_detector();
+        dlib::frontal_face_detector detector = dlib::get_frontal_face_detector();
 #endif
-        shape_predictor pose_model;
-        deserialize(argv[1]) >> pose_model;
+        dlib::shape_predictor pose_model;
+        dlib::deserialize(argv[1]) >> pose_model;
 
         mx_setup();
         create_face_db();
@@ -636,22 +643,22 @@ int main(int argc, char** argv)
             // to reallocate the memory which stores the image as that will make cimg
             // contain dangling pointers.  This basically means you shouldn't modify frame
             // while using cimg.
-            cv_image<bgr_pixel> cimg(frame);
+            dlib::cv_image<dlib::bgr_pixel> cimg(frame);
 #ifdef USE_DLIB_FACE_DETECTION
 #ifdef FACE_DOWNSAMPLE_RATIO
             cv::Mat frame_small;
             cv::resize(frame, frame_small, cv::Size(),
                 1.0/FACE_DOWNSAMPLE_RATIO, 1.0/FACE_DOWNSAMPLE_RATIO);
-            cv_image<bgr_pixel> cimg_small(frame_small);
+            dlib::cv_image<dlib::bgr_pixel> cimg_small(frame_small);
 #endif
 
             // Detect faces
             start = clock();
 #ifdef FACE_DOWNSAMPLE_RATIO
-            std::vector<rectangle> faces_small = detector(cimg_small);
-            std::vector<rectangle> faces;
+            std::vector<dlib::rectangle> faces_small = detector(cimg_small);
+            std::vector<dlib::rectangle> faces;
             for (unsigned long i = 0; i < faces_small.size(); ++i) {
-                rectangle r(
+                dlib::rectangle r(
                     (long)(faces_small[i].left() * FACE_DOWNSAMPLE_RATIO),
                     (long)(faces_small[i].top() * FACE_DOWNSAMPLE_RATIO),
                     (long)(faces_small[i].right() * FACE_DOWNSAMPLE_RATIO),
@@ -681,9 +688,9 @@ int main(int argc, char** argv)
             }
 #else /* not USE_DLIB_FACE_DETECTION */
             // convert CV faces into dlib faces
-            std::vector<rectangle> faces;
+            std::vector<dlib::rectangle> faces;
             for (unsigned long i = 0; i < cv_faces.size(); ++i) {
-                rectangle r(
+                dlib::rectangle r(
                     (long)(cv_faces[i].x),
                     (long)(cv_faces[i].y),
                     (long)(cv_faces[i].x + cv_faces[i].width),
@@ -695,9 +702,9 @@ int main(int argc, char** argv)
 
             // Find the pose of each face.
             start = clock();
-            std::vector<full_object_detection> shapes;
+            std::vector<dlib::full_object_detection> shapes;
             for (unsigned long i = 0; i < faces.size(); ++i) {
-                full_object_detection landmarks = pose_model(cimg, faces[i]);
+                dlib::full_object_detection landmarks = pose_model(cimg, faces[i]);
                 cout << "Landmark num_parts " << landmarks.num_parts() << endl;
                 shapes.push_back(landmarks);
             }
@@ -712,9 +719,9 @@ int main(int argc, char** argv)
 #if 0
             // We can also extract copies of each face that are cropped, rotated upright,
             // and scaled to a standard size as shown here:
-            dlib::array<array2d<rgb_pixel> > face_chips;
-            extract_image_chips(cimg, get_face_chip_details(shapes), face_chips);
-            win_faces.set_image(tile_images(face_chips));
+            dlib::array<dlib::array2d<dlib::rgb_pixel> > face_chips;
+            dlib::extract_image_chips(cimg, dlib::get_face_chip_details(shapes), face_chips);
+            win_faces.set_image(dlib::tile_images(face_chips));
 #else
             // use AffineTransform
             cv::Point2f srcTri[3];
@@ -770,17 +777,17 @@ int main(int argc, char** argv)
             win.add_overlay(faces);
             win.add_overlay(render_face_detections(shapes));
 
-            cv_image<bgr_pixel> cimg_face_align(face_warp);
+            dlib::cv_image<dlib::bgr_pixel> cimg_face_align(face_warp);
             win_faces.set_image(cimg_face_align);
-            const rectangle r;
-            win_faces.add_overlay(r, rgb_pixel(255,0,0), name[id]);
+            const dlib::rectangle r;
+            win_faces.add_overlay(r, dlib::rgb_pixel(255,0,0), name[id]);
 #endif
 #ifdef USE_CV_DISPLAY
             render_face( frame, shapes[0] );
             cv::rectangle( frame, cv_faces[0], cv::Scalar(0,255,0), 1, 16 );
             cv::imshow( "Cam", frame );
-            cv::putText( face_warp, name[id], cv::Point(10, 80),
-                cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(255,255,0), 2 );
+            cv::putText( face_warp, name[id], cv::Point(5, 80),
+                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255,255,0), 2 );
             cv::imshow( "Face", face_warp );
             if((cv::waitKey(1) & 0xFF) == 'q')
                 break;
@@ -789,7 +796,7 @@ int main(int argc, char** argv)
                 << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
         }
     }
-    catch(serialization_error& e)
+    catch(dlib::serialization_error& e)
     {
         cout << "You need dlib's default face landmarking model file to run this example." << endl;
         cout << "You can get it from the following URL: " << endl;
