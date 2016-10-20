@@ -9,6 +9,9 @@
 #include <dlib/gui_widgets.h>
 #include <mxnet/c_predict_api.h>
 #include <numeric>
+extern "C" {
+#include "ccv.h"
+}
 
 /*
  * Config
@@ -20,9 +23,9 @@
 
 #define INPUT_USE_OPENCV_CAMERA
 //#define INPUT_USE_OPENCV_FILE
-#define DETECT_USE_OPENCV
+//#define DETECT_USE_OPENCV
 //#define DETECT_USE_DLIB
-//#define DETECT_USE_CCV
+#define DETECT_USE_CCV
 #define LANDMARK_USE_DLIB
 #define ALIGN_USE_OPENCV
 #define FEATURE_USE_MXNET
@@ -598,6 +601,8 @@ int main(int argc, char** argv)
     // Load face detection and pose estimation models.
     dlib::frontal_face_detector detector = dlib::get_frontal_face_detector();
 #elif defined(DETECT_USE_CCV)
+    ccv_scd_classifier_cascade_t *cascade =
+        ccv_scd_classifier_cascade_read(argv[2]);
 #else
 #error "No detect defined"
 #endif
@@ -679,14 +684,14 @@ int main(int argc, char** argv)
         cout << "DLIB Detector took "
              << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
 
-        cout << "DLIB Detect " << faces.size() << " faces" << endl;
+        // cout << "DLIB Detect " << faces.size() << " faces" << endl;
         // convert to cv_faces
         for (unsigned long i = 0; i < faces.size(); ++i) {
-            cout << "  Face " << i << " ["
-                 << faces[i].left() << ", "
-                 << faces[i].top() << ", "
-                 << faces[i].right() << ", "
-                 << faces[i].bottom() << "]" << endl;
+            //cout << "  DLIB Face " << i << " ["
+            //     << faces[i].left() << ", "
+            //     << faces[i].top() << ", "
+            //     << faces[i].right() << ", "
+            //     << faces[i].bottom() << "]" << endl;
             cv::Rect cv_face(
                 faces[i].left(), faces[i].top(),
                 faces[i].right() - faces[i].left(),
@@ -695,6 +700,36 @@ int main(int argc, char** argv)
             cv_faces.push_back(cv_face);
         }
 #elif defined(DETECT_USE_CCV)
+        ccv_dense_matrix_t* ccv_image = 0;
+        ccv_read(frame.data, &ccv_image,
+            //CCV_IO_ANY_RAW | CCV_IO_BGR_RAW,
+            CCV_IO_BGR_RAW | CCV_IO_ANY_RAW | CCV_IO_GRAY,
+            frame.rows, frame.cols, frame.step[0]);
+        start = clock();
+        ccv_array_t *ccv_faces = ccv_scd_detect_objects(ccv_image, &cascade,
+            1, ccv_scd_default_params);
+        cout << "CCV Detector took "
+             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+
+        //cout << "CCV Detect " << ccv_faces->rnum << " faces" << endl;
+        // convert to cv_faces
+        for (int i = 0; i < ccv_faces->rnum; i++)
+        {
+            ccv_comp_t* ccv_face = (ccv_comp_t*)ccv_array_get(ccv_faces, i);
+            //cout << "  CCV Face " << i << " ["
+            //     << ccv_face->rect.x << ", "
+            //     << ccv_face->rect.y << ", "
+            //     << ccv_face->rect.width << ", "
+            //     << ccv_face->rect.height << "]" << endl;
+            cv::Rect cv_face(
+                ccv_face->rect.x,
+                ccv_face->rect.y,
+                ccv_face->rect.width,
+                ccv_face->rect.height);
+            cv_faces.push_back(cv_face);
+        }
+        ccv_array_free(ccv_faces);
+        ccv_matrix_free(ccv_image);
 #else
 #error "No detect defined"
 #endif
@@ -788,10 +823,13 @@ int main(int argc, char** argv)
 #endif
 
 #ifdef CLASSIFIER_USE_NAIVE
+        start = clock();
         int id0 = find_nearest_face();
         int id1 = find_nearest_face_norm();
         int id2 = find_nearest_face_substract_norm();
         int id = id1;
+        cout << "Classifier took "
+             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
         cout << "Best Match is " << id << " name " << name[id] << endl;
 #endif
 
@@ -828,13 +866,15 @@ int main(int argc, char** argv)
              << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
     }
 
-#ifdef FEATURE_USE_MXNET
-    mx_cleanup();
-#endif
 #ifdef DISPLAY_USE_OPENCV
     cv::destroyAllWindows();
 #endif
-
+#ifdef FEATURE_USE_MXNET
+    mx_cleanup();
+#endif
+#ifdef DETECT_USE_CCV
+    ccv_scd_classifier_cascade_free(cascade);
+#endif
     return 0;
 }
 
