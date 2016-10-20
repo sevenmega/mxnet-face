@@ -18,8 +18,23 @@
 #define HAVE_CCV
 #define HAVE_MXNET
 
+#define INPUT_USE_OPENCV_CAMERA
+//#define INPUT_USE_OPENCV_FILE
+#define DETECT_USE_OPENCV
+//#define DETECT_USE_DLIB
+//#define DETECT_USE_CCV
+#define LANDMARK_USE_DLIB
+#define ALIGN_USE_OPENCV
+#define FEATURE_USE_MXNET
+#define CLASSIFIER_USE_NAIVE
+//#define DISPLAY_USE_OPENCV
+#define DISPLAY_USE_DLIB
+
+#define DETECT_DOWNSAMPLE_RATIO     2
+
 using namespace std;
 
+#ifdef ALIGN_USE_DLIB
 static float face_align_template[][2] = {
     {0.0792396913815, 0.339223741112}, {0.0829219487236, 0.456955367943},
     {0.0967927109165, 0.575648016728}, {0.122141515615,  0.691921601066},
@@ -58,17 +73,9 @@ static float face_align_template[][2] = {
     };
 static int INNER_EYES_AND_BOTTOM_LIP[] = {39, 42, 57};
 static int OUTER_EYES_AND_NOSE[] = {36, 45, 33};
+#endif
 
-// WR to speedup
-#define FACE_DOWNSAMPLE_RATIO 2
-// toggle to use CV Face Detection
-// around x2 the speed, however, with a lot more false positive
-//#define USE_CV_FACE_DETECTION
-#define USE_DLIB_FACE_DETECTION
-
-//#define USE_CV_DISPLAY
-#define USE_DLIB_DISPLAY
-
+#ifdef FEATURE_USE_MXNET
 // Read file to buffer
 class BufferFile {
  public :
@@ -242,7 +249,9 @@ static void mx_forward(void)
 
     MXPredGetOutput(mx_predictor, output_index, mx_output_data.data(), mx_output_size);
 }
+#endif
 
+#ifdef CLASSIFIER_USE_NAIVE
 // clapton
 static float face_0[] = {
  -2.08490801,  0.32610536, -3.00524211, -0.27926248, -1.63280988,  3.53943563,
@@ -524,8 +533,9 @@ static int find_nearest_face_substract_norm(void)
     }
     return best_id;
 }
+#endif
 
-#ifdef USE_CV_DISPLAY
+#ifdef DISPLAY_USE_OPENCV
 void draw_polyline(cv::Mat &img, const dlib::full_object_detection& d, const int start, const int end, bool isClosed = false)
 {
     std::vector <cv::Point> points;
@@ -559,257 +569,272 @@ void render_face(cv::Mat &img, const dlib::full_object_detection& d)
 
 int main(int argc, char** argv)
 {
-    try
-    {
-        cv::VideoCapture cap(0);
-        if (!cap.isOpened())
-        {
-            cerr << "Unable to connect to camera" << endl;
-            return 1;
+#ifdef INPUT_USE_OPENCV_CAMERA
+    cv::VideoCapture cap(0);
+    if ( !cap.isOpened() ) {
+        cerr << "Unable to connect to camera" << endl;
+        return 1;
+    }
+#elif defined(INPUT_USE_OPENCV_FILE)
+#else
+#error "No input defined"
+#endif
+
+#ifdef DISPLAY_USE_OPENCV
+    cv::namedWindow( "Cam" );
+    cv::namedWindow( "Face" );
+#elif defined(DISPLAY_USE_DLIB)
+    dlib::image_window win, win_faces;
+#endif
+
+#ifdef DETECT_USE_OPENCV
+    cv::CascadeClassifier face_cascade;
+    // Load the cascade
+    if ( !face_cascade.load(argv[2]) ) {
+        cerr << "Unable to Load CV face cascade" << endl;
+        return 1;
+    };
+#elif defined(DETECT_USE_DLIB)
+    // Load face detection and pose estimation models.
+    dlib::frontal_face_detector detector = dlib::get_frontal_face_detector();
+#elif defined(DETECT_USE_CCV)
+#else
+#error "No detect defined"
+#endif
+
+#ifdef LANDMARK_USE_DLIB
+    dlib::shape_predictor pose_model;
+    dlib::deserialize(argv[1]) >> pose_model;
+#endif
+
+#ifdef FEATURE_USE_MXNET
+    mx_setup();
+#endif
+
+#ifdef CLASSIFIER_USE_NAIVE
+    create_face_db();
+#endif
+
+    // always pass frames in cv::Mat
+    cv::Mat frame;
+    clock_t start;
+    int finish = 0;
+
+    while(!finish) {
+#ifdef INPUT_USE_OPENCV_CAMERA
+        // Grab a frame
+        cap >> frame;
+        if (frame.empty()) {
+            cerr << "No captured frame" << endl;
+            break;
+        }
+#elif defined(INPUT_USE_OPENCV_FILE)
+        finish = 1;
+#else
+#error "No input defined"
+#endif
+        cout << "Input frame [" << frame.rows << "x" << frame.cols
+             << "@" << frame.step[0]/frame.cols << "]" << endl;
+
+        // always pass bbs in vector of cv::Rect
+        std::vector<cv::Rect> cv_faces;
+
+#ifdef DETECT_USE_OPENCV
+        cv::Mat frame_gray;
+        cv::cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
+        cv::equalizeHist(frame_gray, frame_gray);
+
+        // CV Detect faces
+        start = clock();
+        face_cascade.detectMultiScale(frame_gray, cv_faces,
+            1.1, 2, 0 | cv::CASCADE_SCALE_IMAGE, cv::Size(30, 30));
+        cout << "CV Detector took "
+             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+#elif defined(DETECT_USE_DLIB)
+        dlib::cv_image<dlib::bgr_pixel> cimg(frame);
+#ifdef DETECT_DOWNSAMPLE_RATIO
+        cv::Mat frame_small;
+        cv::resize(frame, frame_small, cv::Size(),
+            1.0/DETECT_DOWNSAMPLE_RATIO, 1.0/DETECT_DOWNSAMPLE_RATIO);
+        dlib::cv_image<dlib::bgr_pixel> cimg_small(frame_small);
+#endif
+
+        // Detect faces
+        start = clock();
+#ifdef DETECT_DOWNSAMPLE_RATIO
+        std::vector<dlib::rectangle> faces_small = detector(cimg_small);
+        std::vector<dlib::rectangle> faces;
+        for (unsigned long i = 0; i < faces_small.size(); ++i) {
+            dlib::rectangle r(
+                (long)(faces_small[i].left() * DETECT_DOWNSAMPLE_RATIO),
+                (long)(faces_small[i].top() * DETECT_DOWNSAMPLE_RATIO),
+                (long)(faces_small[i].right() * DETECT_DOWNSAMPLE_RATIO),
+                (long)(faces_small[i].bottom() * DETECT_DOWNSAMPLE_RATIO)
+            );
+            faces.push_back(r);
+        }
+#else
+        std::vector<dlib::rectangle> faces = detector(cimg);
+#endif
+        cout << "DLIB Detector took "
+             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+
+        cout << "DLIB Detect " << faces.size() << " faces" << endl;
+        // convert to cv_faces
+        for (unsigned long i = 0; i < faces.size(); ++i) {
+            cout << "  Face " << i << " ["
+                 << faces[i].left() << ", "
+                 << faces[i].top() << ", "
+                 << faces[i].right() << ", "
+                 << faces[i].bottom() << "]" << endl;
+            cv::Rect cv_face(
+                faces[i].left(), faces[i].top(),
+                faces[i].right() - faces[i].left(),
+                faces[i].bottom() - faces[i].top()
+            );
+            cv_faces.push_back(cv_face);
+        }
+#elif defined(DETECT_USE_CCV)
+#else
+#error "No detect defined"
+#endif
+        cout << "Detect " << cv_faces.size() << " faces" << endl;
+        for (unsigned long i = 0; i < cv_faces.size(); ++i) {
+            cout << "  Face " << i << " ["
+                 << cv_faces[i].x << ", "
+                 << cv_faces[i].y << ", "
+                 << cv_faces[i].x + cv_faces[i].width << ", "
+                 << cv_faces[i].y + cv_faces[i].height << "]" << endl;
         }
 
-#ifdef USE_DLIB_DISPLAY
-        dlib::image_window win, win_faces;
-#endif
-#ifdef USE_CV_DISPLAY
-        cv::namedWindow( "Cam");
-        cv::namedWindow( "Face");
-#endif
-        clock_t start;
-        cv::Mat frame;
-
-#ifdef USE_CV_FACE_DETECTION
-        cv::CascadeClassifier face_cascade;
-
-        // Load the cascade
-        if (!face_cascade.load(argv[2])) {
-            cerr << "Unable to Load CV face cascade" << endl;
-            return 1;
-        };
-#endif
-
-#ifdef USE_DLIB_FACE_DETECTION
-        // Load face detection and pose estimation models.
-        dlib::frontal_face_detector detector = dlib::get_frontal_face_detector();
-#endif
-        dlib::shape_predictor pose_model;
-        dlib::deserialize(argv[1]) >> pose_model;
-
-        mx_setup();
-        create_face_db();
-
-        // Grab and process frames until the main window is closed by the user.
-        while(1)
-        {
-#ifdef USE_DLIB_DISPLAY
-            if (win.is_closed()) {
-                break;
-            }
-#endif
-
-            // Grab a frame
-            cap >> frame;
-            if (frame.empty()) {
-                cerr << "No captured frame" << endl;
-                break;
-            }
-
-            std::vector<cv::Rect> cv_faces;
-#ifdef USE_CV_FACE_DETECTION
-            cv::Mat frame_gray;
-            cv::cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
-            cv::equalizeHist(frame_gray, frame_gray);
-
-            // CV Detect faces
-            start = clock();
-            face_cascade.detectMultiScale(frame_gray, cv_faces,
-                1.1, 2, 0 | cv::CASCADE_SCALE_IMAGE, cv::Size(30, 30));
-            cout << "CV Detector took "
-                << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
-
-            cout << "CV Detect " << cv_faces.size() << " faces" << endl;
-            for (unsigned long i = 0; i < cv_faces.size(); ++i) {
-                cout << "  Face " << i << " ["
-                     << cv_faces[i].x << ", "
-                     << cv_faces[i].y << ", "
-                     << cv_faces[i].x + cv_faces[i].width << ", "
-                     << cv_faces[i].y + cv_faces[i].height << "]" << endl;
-            }
-#endif
-
-            // Turn OpenCV's Mat into something dlib can deal with.  Note that this just
-            // wraps the Mat object, it doesn't copy anything.  So cimg is only valid as
-            // long as frame is valid.  Also don't do anything to frame that would cause it
-            // to reallocate the memory which stores the image as that will make cimg
-            // contain dangling pointers.  This basically means you shouldn't modify frame
-            // while using cimg.
-            dlib::cv_image<dlib::bgr_pixel> cimg(frame);
-#ifdef USE_DLIB_FACE_DETECTION
-#ifdef FACE_DOWNSAMPLE_RATIO
-            cv::Mat frame_small;
-            cv::resize(frame, frame_small, cv::Size(),
-                1.0/FACE_DOWNSAMPLE_RATIO, 1.0/FACE_DOWNSAMPLE_RATIO);
-            dlib::cv_image<dlib::bgr_pixel> cimg_small(frame_small);
-#endif
-
-            // Detect faces
-            start = clock();
-#ifdef FACE_DOWNSAMPLE_RATIO
-            std::vector<dlib::rectangle> faces_small = detector(cimg_small);
-            std::vector<dlib::rectangle> faces;
-            for (unsigned long i = 0; i < faces_small.size(); ++i) {
-                dlib::rectangle r(
-                    (long)(faces_small[i].left() * FACE_DOWNSAMPLE_RATIO),
-                    (long)(faces_small[i].top() * FACE_DOWNSAMPLE_RATIO),
-                    (long)(faces_small[i].right() * FACE_DOWNSAMPLE_RATIO),
-                    (long)(faces_small[i].bottom() * FACE_DOWNSAMPLE_RATIO)
-                );
-                faces.push_back(r);
-            }
-#else
-            std::vector<rectangle> faces = detector(cimg);
-#endif
-            cout << "Detector took "
-                << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
-
-            cout << "Detect " << faces.size() << " faces" << endl;
-            for (unsigned long i = 0; i < faces.size(); ++i) {
-                cout << "  Face " << i << " ["
-                     << faces[i].left() << ", "
-                     << faces[i].top() << ", "
-                     << faces[i].right() << ", "
-                     << faces[i].bottom() << "]" << endl;
-                cv::Rect cv_face(
-                    faces[i].left(), faces[i].top(),
-                    faces[i].right() - faces[i].left(),
-                    faces[i].bottom() - faces[i].top()
-                );
-                cv_faces.push_back(cv_face);
-            }
-#else /* not USE_DLIB_FACE_DETECTION */
-            // convert CV faces into dlib faces
-            std::vector<dlib::rectangle> faces;
-            for (unsigned long i = 0; i < cv_faces.size(); ++i) {
-                dlib::rectangle r(
-                    (long)(cv_faces[i].x),
-                    (long)(cv_faces[i].y),
-                    (long)(cv_faces[i].x + cv_faces[i].width),
-                    (long)(cv_faces[i].y + cv_faces[i].height)
-                );
-                faces.push_back(r);
-            }
-#endif
-
-            // Find the pose of each face.
-            start = clock();
-            std::vector<dlib::full_object_detection> shapes;
-            for (unsigned long i = 0; i < faces.size(); ++i) {
-                dlib::full_object_detection landmarks = pose_model(cimg, faces[i]);
-                cout << "Landmark num_parts " << landmarks.num_parts() << endl;
-                shapes.push_back(landmarks);
-            }
-            cout << "Predictor took "
-               << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
-
-            if (shapes.size() == 0) {
-                continue;
-            }
-
-            start = clock();
-#if 0
-            // We can also extract copies of each face that are cropped, rotated upright,
-            // and scaled to a standard size as shown here:
-            dlib::array<dlib::array2d<dlib::rgb_pixel> > face_chips;
-            dlib::extract_image_chips(cimg, dlib::get_face_chip_details(shapes), face_chips);
-            win_faces.set_image(dlib::tile_images(face_chips));
-#else
-            // use AffineTransform
-            cv::Point2f srcTri[3];
-            cv::Point2f dstTri[3];
-
-            srcTri[0] = cv::Point2f( shapes[0].part(36).x(), shapes[0].part(36).y() );
-            srcTri[1] = cv::Point2f( shapes[0].part(45).x(), shapes[0].part(45).y() );
-            srcTri[2] = cv::Point2f( shapes[0].part(33).x(), shapes[0].part(33).y() );
-            cout << "srcTri: ["
-                << srcTri[0].x << ", " << srcTri[0].y << "], [ "
-                << srcTri[1].x << ", " << srcTri[1].y << "], [ "
-                << srcTri[2].x << ", " << srcTri[2].y << "]" << endl;
-            // hard-code for 128x128, {36, 45, 33}
-            dstTri[0] = cv::Point2f( 24.85209656,   21.66616631 );
-            dstTri[1] = cv::Point2f( 100.97396851,  20.24590683 );
-            dstTri[2] = cv::Point2f( 63.35371399,   65.84849548 );
-            cv::Mat warp_mat = cv::getAffineTransform(srcTri, dstTri);
-            cv::Mat face_warp = cv::Mat::zeros( 128, 128,  frame.type() );
-            cv::warpAffine(frame, face_warp, warp_mat, face_warp.size() );
-#endif
-            cout << "Align took "
-               << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
-
-            GetImage(face_warp, mx_input_data.data());
-#if 0
-            //-- Read Image Data from file
-            std::string test_file = std::string("../data/my-align/larry/image-10.png");
-            GetImageFile(test_file, mx_input_data.data());
-#endif
-            start = clock();
-            mx_forward();
-            cout << "Forward took "
-               << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
-#if 0
-            cout << "output size = " << mx_output_data.size() << endl;
-            for (int i = 0; i < mx_output_data.size(); i++) {
-                cout << mx_output_data[i] << " ";
-            }
-            cout << endl;
-#endif
-
-            int id0 = find_nearest_face();
-            int id1 = find_nearest_face_norm();
-            int id2 = find_nearest_face_substract_norm();
-            int id = id1;
-            cout << "Best Match is " << id << " name " << name[id] << endl;
-
-            start = clock();
-#ifdef USE_DLIB_DISPLAY
-            // Display it all on the screen
-            win.clear_overlay();
-            win.set_image(cimg);
-            win.add_overlay(faces);
-            win.add_overlay(render_face_detections(shapes));
-
-            dlib::cv_image<dlib::bgr_pixel> cimg_face_align(face_warp);
-            win_faces.set_image(cimg_face_align);
-            const dlib::rectangle r;
-            win_faces.add_overlay(r, dlib::rgb_pixel(255,0,0), name[id]);
-#endif
-#ifdef USE_CV_DISPLAY
-            render_face( frame, shapes[0] );
-            cv::rectangle( frame, cv_faces[0], cv::Scalar(0,255,0), 1, 16 );
-            cv::imshow( "Cam", frame );
-            cv::putText( face_warp, name[id], cv::Point(5, 80),
-                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255,255,0), 2 );
-            cv::imshow( "Face", face_warp );
-            if((cv::waitKey(1) & 0xFF) == 'q')
-                break;
-#endif
-            cout << "Display took "
-                << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+#if !defined(DETECT_USE_DLIB) && defined(LANDMARK_USE_DLIB)
+        // get dlib::cv_image
+        dlib::cv_image<dlib::bgr_pixel> cimg(frame);
+        // convert CV faces into dlib faces
+        std::vector<dlib::rectangle> faces;
+        for (unsigned long i = 0; i < cv_faces.size(); ++i) {
+            dlib::rectangle r(
+                (long)(cv_faces[i].x),
+                (long)(cv_faces[i].y),
+                (long)(cv_faces[i].x + cv_faces[i].width),
+                (long)(cv_faces[i].y + cv_faces[i].height)
+            );
+            faces.push_back(r);
         }
+#endif
+
+#ifdef LANDMARK_USE_DLIB
+        // Find the pose of each face.
+        start = clock();
+        std::vector<dlib::full_object_detection> shapes;
+        for (unsigned long i = 0; i < faces.size(); ++i) {
+            dlib::full_object_detection landmarks = pose_model(cimg, faces[i]);
+            cout << "Landmark num_parts " << landmarks.num_parts() << endl;
+            shapes.push_back(landmarks);
+        }
+        cout << "Predictor took "
+             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+
+        if (shapes.size() == 0) {
+            cout << "No landmark found" << endl;
+            continue;
+        }
+#endif
+
+#if 0
+        // We can also extract copies of each face that are cropped, rotated upright,
+        // and scaled to a standard size as shown here:
+        dlib::array<dlib::array2d<dlib::rgb_pixel> > face_chips;
+        dlib::extract_image_chips(cimg, dlib::get_face_chip_details(shapes), face_chips);
+        win_faces.set_image(dlib::tile_images(face_chips));
+#endif
+
+#ifdef ALIGN_USE_OPENCV
+        start = clock();
+        // use AffineTransform
+        cv::Point2f srcTri[3], dstTri[3];
+        srcTri[0] = cv::Point2f( shapes[0].part(36).x(), shapes[0].part(36).y() );
+        srcTri[1] = cv::Point2f( shapes[0].part(45).x(), shapes[0].part(45).y() );
+        srcTri[2] = cv::Point2f( shapes[0].part(33).x(), shapes[0].part(33).y() );
+        cout << "srcTri: ["
+             << srcTri[0].x << ", " << srcTri[0].y << "], [ "
+             << srcTri[1].x << ", " << srcTri[1].y << "], [ "
+             << srcTri[2].x << ", " << srcTri[2].y << "]" << endl;
+        // hard-code for 128x128, {36, 45, 33}
+        dstTri[0] = cv::Point2f( 24.85209656,   21.66616631 );
+        dstTri[1] = cv::Point2f( 100.97396851,  20.24590683 );
+        dstTri[2] = cv::Point2f( 63.35371399,   65.84849548 );
+
+        cv::Mat warp_mat = cv::getAffineTransform(srcTri, dstTri);
+        cv::Mat face_warp = cv::Mat::zeros( 128, 128,  frame.type() );
+        cv::warpAffine(frame, face_warp, warp_mat, face_warp.size() );
+        cout << "Align took "
+             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+#endif
+
+#ifdef FEATURE_USE_MXNET
+        GetImage(face_warp, mx_input_data.data());
+        start = clock();
+        mx_forward();
+        cout << "Forward took "
+             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+#if 0
+        cout << "output size = " << mx_output_data.size() << endl;
+        for (int i = 0; i < mx_output_data.size(); i++) {
+            cout << mx_output_data[i] << " ";
+        }
+        cout << endl;
+#endif
+#endif
+
+#ifdef CLASSIFIER_USE_NAIVE
+        int id0 = find_nearest_face();
+        int id1 = find_nearest_face_norm();
+        int id2 = find_nearest_face_substract_norm();
+        int id = id1;
+        cout << "Best Match is " << id << " name " << name[id] << endl;
+#endif
+
+        start = clock();
+#ifdef DISPLAY_USE_OPENCV
+        render_face( frame, shapes[0] );
+        cv::rectangle( frame, cv_faces[0], cv::Scalar(0,255,0), 1, 16 );
+        cv::imshow( "Cam", frame );
+        cv::putText( face_warp, name[id], cv::Point(5, 80),
+            cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255,255,0), 2 );
+        cv::imshow( "Face", face_warp );
+        // waitKey is must for display
+        int key = cv::waitKey(30) & 0xFF;  // trigger display and hold for 30ms
+        cout << "key = " << key << endl;
+        if (key == 27 || key == 'q') {
+            finish = 1;
+        }
+#elif defined(DISPLAY_USE_DLIB)
+        // Display it all on the screen
+        win.clear_overlay();
+        win.set_image(cimg);
+        win.add_overlay(faces);
+        win.add_overlay(render_face_detections(shapes));
+
+        dlib::cv_image<dlib::bgr_pixel> cimg_face_align(face_warp);
+        win_faces.set_image(cimg_face_align);
+        const dlib::rectangle r;
+        win_faces.add_overlay(r, dlib::rgb_pixel(255,0,0), name[id]);
+        if (win.is_closed() || win_faces.is_closed()) {
+            finish = 1;
+        }
+#endif
+        cout << "Display took "
+             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
     }
-    catch(dlib::serialization_error& e)
-    {
-        cout << "You need dlib's default face landmarking model file to run this example." << endl;
-        cout << "You can get it from the following URL: " << endl;
-        cout << "   http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2" << endl;
-        cout << endl << e.what() << endl;
-    }
-    catch(exception& e)
-    {
-        cout << e.what() << endl;
-    }
+
+#ifdef FEATURE_USE_MXNET
     mx_cleanup();
-#ifdef USE_CV_DISPLAY
+#endif
+#ifdef DISPLAY_USE_OPENCV
     cv::destroyAllWindows();
 #endif
+
+    return 0;
 }
 
