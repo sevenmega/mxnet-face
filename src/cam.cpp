@@ -581,7 +581,7 @@ int main(int argc, char** argv)
 #endif
 
 #ifdef DISPLAY_USE_OPENCV
-    cv::namedWindow( "Cam" );
+    cv::namedWindow( "Image" );
     cv::namedWindow( "Face" );
 #elif defined(DISPLAY_USE_DLIB)
     dlib::image_window win, win_faces;
@@ -629,7 +629,7 @@ int main(int argc, char** argv)
             break;
         }
 #elif defined(INPUT_USE_OPENCV_FILE)
-        finish = 1;
+        frame = cv::imread(argv[3], CV_LOAD_IMAGE_COLOR);
 #else
 #error "No input defined"
 #endif
@@ -799,7 +799,7 @@ int main(int argc, char** argv)
 #ifdef DISPLAY_USE_OPENCV
         render_face( frame, shapes[0] );
         cv::rectangle( frame, cv_faces[0], cv::Scalar(0,255,0), 1, 16 );
-        cv::imshow( "Cam", frame );
+        cv::imshow( "Image", frame );
         cv::putText( face_warp, name[id], cv::Point(5, 80),
             cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255,255,0), 2 );
         cv::imshow( "Face", face_warp );
