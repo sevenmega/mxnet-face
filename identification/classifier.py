@@ -26,6 +26,7 @@ from sklearn.naive_bayes import GaussianNB
 from lightened_cnn import lightened_cnn_b_feature
 from data import iterImgs
 from align_dlib import AlignDlib
+import msgpack as mp
 
 ctx = mx.gpu(0)
 
@@ -154,6 +155,70 @@ def train(args):
     print("Saving classifier to '{}'".format(fName))
     with open(fName, 'w') as f:
         pickle.dump((le, clf), f)
+
+def encode(obj):
+    """
+    Data encoder for serializing numpy data types.
+    """
+    if isinstance(obj, np.ndarray):
+        return {b'nd': True,
+                b'type': obj.dtype.str,
+                b'shape': obj.shape,
+                b'data': obj.tostring()}
+    elif isinstance(obj, (np.bool_, np.number)):
+        return {b'nd': False,
+                b'type': obj.dtype.str,
+                b'data': obj.tostring()}
+    elif isinstance(obj, complex):
+        return {b'complex': True,
+                b'data': obj.__repr__()}
+    else:
+        return obj
+
+def decode(obj):
+    """
+    Decoder for deserializing numpy data types.
+    """
+
+    try:
+        if b'nd' in obj:
+            if obj[b'nd'] is True:
+                return np.fromstring(obj[b'data'],
+                            dtype=np.dtype(obj[b'type'])).reshape(obj[b'shape'])
+            else:
+                return np.fromstring(obj[b'data'],
+                            dtype=np.dtype(obj[b'type']))[0]
+        elif 'complex' in obj:
+            return complex(obj[b'data'])
+        else:
+            return obj
+    except KeyError:
+        return obj
+
+def save_msgpack(args):
+    print("Loading embeddings.")
+    fname = "{}/labels.csv".format(args.feature_prefix)
+    labels = pd.read_csv(fname, header=None).as_matrix()[:, 1]
+    labels = map(itemgetter(1),
+                 map(os.path.split,
+                     map(os.path.dirname, labels)))  # Get the directory.
+    fname = "{}/reps.csv".format(args.feature_prefix)
+    embeddings = pd.read_csv(fname, header=None).as_matrix()
+    #print type(labels)
+    #print labels
+    #print type(embeddings)
+    #print embeddings
+    # this is finding one entry for each name, and it always overwrite
+    # if the name is the same, therefore always the last rep is kept
+    dictionary = dict(zip(labels, embeddings))
+    # print dictionary
+    packed = mp.packb(dictionary, default=encode)
+    fmp = "{}/feature_db.mp".format(args.feature_prefix)
+    with open(fmp, 'w') as fmpout:
+        fmpout.write(packed)
+    #with open("mp_data", 'r') as fmpin:
+    #    unpacked = mp.unpack(fmpin, object_hook=decode)
+    #    print unpacked
 
 def infer(args, imgname):
     with open(args.classifier_model, 'r') as f:
@@ -304,6 +369,8 @@ def main():
                         help='Do time measure on single image rep')
     parser.add_argument('--feature', type=int, default=0,
                         help='Do feature extraction')
+    parser.add_argument('--msgpack', type=int, default=0,
+                        help='Save the reps and labels to a msgpack file')
     parser.add_argument('--train', type=int, default=0,
                         help='Do train')
     parser.add_argument('--infer', type=int, default=0,
@@ -374,6 +441,12 @@ def main():
         if not os.path.exists(args.classifier_prefix):
             os.makedirs(args.classifier_prefix)
         train(args)
+        sys.exit(0)
+    if args.msgpack == 1:
+        if not os.path.exists(args.feature_prefix):
+            logging.info("Error: feature-prefix not present.")
+            sys.exit(-1)
+        save_msgpack(args)
         sys.exit(0)
     if args.infer == 1:
         if not os.path.isfile(args.classifier_model):
