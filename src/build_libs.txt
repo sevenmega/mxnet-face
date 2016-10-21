@@ -1,0 +1,24 @@
+1. dlib
+$ git clone https://github.com/davisking/dlib.git
+$ cd dlib
+$ cd dlib
+$ mkdir build; cd build
+$ cmake .. -DDLIB_USE_CUDA=OFF -DDLIB_USE_LAPACK=OFF -DUSE_AVX_INSTRUCTIONS=OFF -DUSE_SSE4_INSTRUCTIONS=OFF -DUSE_SSE2_INSTRUCTIONS=OFF
+$ cmake --build .
+libdlib.so is in dlib/build
+
+2. mxnet
+$ git clone --recursive https://github.com/dmlc/mxnet.git
+$ cd amalgamation/
+$ vim amalgamation.py
+Add followings in blacklist
+    'mkl/mkl_batch_norm-inl.h', 'mkl/mkl_concat-inl.h',
+    'mkl/mkl_convolution-inl.h', 'mkl/mkl_elementwise-inl.h',
+    'mkl/mkl_fully_connected-inl.h', 'mkl/mkl_lrn-inl.h',
+    'mkl/mkl_memory-inl.h', 'mkl/mkl_pooling-inl.h',
+    'mkl/mkl_relu-inl.h', 'mkl_vml_functions.h',
+    'mxnet/mkl_memory.h'
+$ make
+Don't use the latest one ...
+
+
