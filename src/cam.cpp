@@ -30,10 +30,11 @@ extern "C" {
 #define ALIGN_USE_OPENCV
 #define FEATURE_USE_MXNET
 #define CLASSIFIER_USE_NAIVE
-//#define DISPLAY_USE_OPENCV
-#define DISPLAY_USE_DLIB
+#define DISPLAY_USE_OPENCV
+//#define DISPLAY_USE_DLIB
 
 #define DETECT_DOWNSAMPLE_RATIO     2
+//#define FACE_USE_GRAY
 
 using namespace std;
 
@@ -118,14 +119,10 @@ class BufferFile {
     }
 };
 
-static PredictorHandle mx_predictor = 0;
-static int mx_input_size = 0;
-static int mx_output_size = 0;
-static std::vector<mx_float> mx_input_data;
-static std::vector<float> mx_output_data;
-
-static void mx_setup(void)
+static PredictorHandle mx_setup(int &input_size, int &output_size)
 {
+    PredictorHandle predictor = 0;
+
     // Models path for your model, you have to modify it
     BufferFile json_data("../model/lightened_cnn/lightened_cnn-symbol.json");
     BufferFile param_data("../model/lightened_cnn/lightened_cnn-0166_cpu.params");
@@ -164,93 +161,55 @@ static void mx_setup(void)
                  input_shape_data,
                  num_output_nodes,
                  output_keys,
-                 &mx_predictor);
+                 &predictor);
 
-    mx_input_size = width * height * channels;
-    mx_input_data = std::vector<mx_float>(mx_input_size);
-
+    input_size = width * height * channels;
     mx_uint output_index = 0;
-
     mx_uint *shape = 0;
     mx_uint shape_len;
-
     //-- Get Output Size
-    MXPredGetOutputShape(mx_predictor, output_index, &shape, &shape_len);
-
-    mx_output_size = 1;
+    MXPredGetOutputShape(predictor, output_index, &shape, &shape_len);
+    output_size = 1;
     for (mx_uint i = 0; i < shape_len; ++i)
-        mx_output_size *= shape[i];
-    mx_output_data = std::vector<float>(mx_output_size);
+        output_size *= shape[i];
+
+    return predictor;
 }
 
-static void mx_cleanup(void)
+static void mx_cleanup(PredictorHandle predictor)
 {
     // Release Predictor
-    MXPredFree(mx_predictor);
+    MXPredFree(predictor);
 }
 
-static void GetImageFile(const std::string image_file, mx_float* image_data) {
-#if 1
-    cv::Mat im = cv::imread(image_file, 0);  // 0 is Gray
-#else
-    cv::Mat im_color = cv::imread(image_file, 1);
-    cv::Mat im;
-    cv::cvtColor(im_color, im, cv::COLOR_BGR2GRAY);
-#endif
-
-    if (im.empty()) {
-        std::cerr << "Can't open the image. Please check " << image_file << ". \n";
-        assert(false);
-    }
-
+// return vector only in c++11
+// convert form U8 to float element-wise
+static std::vector<float> mx_get_image(const cv::Mat im) {
     int size = im.rows * im.cols;
-
 #if 0
-    cout << "image size = " << size << endl;
+    cout << "im size = " << size << endl;
     cout << "im = "<< endl << " "  << im << endl << endl;
 #endif
-
-    mx_float* ptr_image = image_data;
-
+    std::vector<float> input_data (size);
+    float *ptr_data = input_data.data();
     for (int i = 0; i < im.rows; i++) {
         for (int j = 0; j < im.cols; j++) {
-            image_data[i * im.cols + j] = *im.ptr<uchar>(i, j)/255.0;
+            ptr_data[i * im.cols + j] = (float)*im.ptr<uchar>(i, j)/255.0;
         }
     }
+    return input_data;
 }
 
-static void GetImage(const cv::Mat im_color, mx_float* image_data) {
-    cv::Mat im;
-    cv::cvtColor(im_color, im, cv::COLOR_BGR2GRAY);
-
-    int size = im.rows * im.cols;
-
-#if 0
-    cout << "image size = " << size << endl;
-    cout << "im = "<< endl << " "  << im << endl << endl;
-#endif
-
-    mx_float* ptr_image = image_data;
-
-    for (int i = 0; i < im.rows; i++) {
-        for (int j = 0; j < im.cols; j++) {
-            image_data[i * im.cols + j] = *im.ptr<uchar>(i, j)/255.0;
-        }
-    }
-}
-
-static void mx_forward(void)
+// return vector only in c++11
+static std::vector<float> mx_forward(PredictorHandle predictor,
+    std::vector<float> input_data, int input_size, int output_size)
 {
-    //-- Set Input Image
-    MXPredSetInput(mx_predictor, "data", mx_input_data.data(), mx_input_size);
-
-    //-- Do Predict Forward
-    MXPredForward(mx_predictor);
-
-    //-- Get Output Result
+    MXPredSetInput(predictor, "data", input_data.data(), input_size);
+    MXPredForward(predictor);
     mx_uint output_index = 0;
-
-    MXPredGetOutput(mx_predictor, output_index, mx_output_data.data(), mx_output_size);
+    std::vector<float> output_data (output_size);
+    MXPredGetOutput(predictor, output_index, output_data.data(), output_size);
+    return output_data;
 }
 #endif
 
@@ -456,7 +415,7 @@ static void create_face_db(void)
 static std::string name[] = {
     "Clapton", "lennon", "Larry"};
 
-static int find_nearest_face(void)
+static int find_nearest_face(std::vector<float> &rep)
 {
     int id = 0;
     double dis_min = 0.0f;
@@ -470,7 +429,7 @@ static int find_nearest_face(void)
         }
         cout << endl;
 #endif
-        double dis = cv::norm( *it , mx_output_data , cv::NORM_L2);
+        double dis = cv::norm( *it , rep , cv::NORM_L2);
         cout << "dis = " << dis << endl;
 
         if (best_id < 0 || dis < dis_min) {
@@ -482,7 +441,7 @@ static int find_nearest_face(void)
     return best_id;
 }
 
-static int find_nearest_face_norm(void)
+static int find_nearest_face_norm(std::vector<float> &rep)
 {
     int id = 0;
     double dis_max = 0.0f;
@@ -498,7 +457,7 @@ static int find_nearest_face_norm(void)
         cout << endl;
 #endif
         std::vector<float> output_norm(256);
-        calc_norm(mx_output_data, output_norm);
+        calc_norm(rep, output_norm);
         double dis = calc_dis(output_norm, *it);
         cout << "dis_1 = " << dis << endl;
 
@@ -511,7 +470,7 @@ static int find_nearest_face_norm(void)
     return best_id;
 }
 
-static int find_nearest_face_substract_norm(void)
+static int find_nearest_face_substract_norm(std::vector<float> &rep)
 {
     int id = 0;
     double dis_min = 0.0f;
@@ -522,7 +481,7 @@ static int find_nearest_face_substract_norm(void)
     for (std::vector< std::vector<float> >::iterator it = rep_db_norm.begin(); it != rep_db_norm.end(); ++it) {
         //diff = mx_output_data - *it;
         std::set_difference(
-            mx_output_data.begin(), mx_output_data.end(),
+            rep.begin(), rep.end(),
             (*it).begin(), (*it).end(),
             std::back_inserter( diff ));
         double dis = calc_norm_value(diff);
@@ -585,7 +544,7 @@ int main(int argc, char** argv)
 
 #ifdef DISPLAY_USE_OPENCV
     cv::namedWindow( "Image" );
-    cv::namedWindow( "Face" );
+    cv::namedWindow( "Faces" );
 #elif defined(DISPLAY_USE_DLIB)
     dlib::image_window win, win_faces;
 #endif
@@ -613,7 +572,8 @@ int main(int argc, char** argv)
 #endif
 
 #ifdef FEATURE_USE_MXNET
-    mx_setup();
+    int mx_input_size, mx_output_size;
+    PredictorHandle mx_predictor = mx_setup(mx_input_size, mx_output_size);
 #endif
 
 #ifdef CLASSIFIER_USE_NAIVE
@@ -622,6 +582,7 @@ int main(int argc, char** argv)
 
     // always pass frames in cv::Mat
     cv::Mat frame;
+    cv::Mat frame_gray;
     clock_t start;
     int finish = 0;
 
@@ -641,12 +602,12 @@ int main(int argc, char** argv)
         cout << "Input frame [" << frame.rows << "x" << frame.cols
              << "@" << frame.step[0]/frame.cols << "]" << endl;
 
-        // always pass bbs in vector of cv::Rect
+        // get gray
+        cv::cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
+        // always pass face bbs in vector of cv::Rect
         std::vector<cv::Rect> cv_faces;
 
 #ifdef DETECT_USE_OPENCV
-        cv::Mat frame_gray;
-        cv::cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
         cv::equalizeHist(frame_gray, frame_gray);
 
         // CV Detect faces
@@ -760,121 +721,159 @@ int main(int argc, char** argv)
 
 #ifdef LANDMARK_USE_DLIB
         // Find the pose of each face.
-        start = clock();
         std::vector<dlib::full_object_detection> shapes;
-        for (unsigned long i = 0; i < faces.size(); ++i) {
+        for (int i = 0; i < faces.size(); i++) {
+            start = clock();
             dlib::full_object_detection landmarks = pose_model(cimg, faces[i]);
-            cout << "Landmark num_parts " << landmarks.num_parts() << endl;
+            cout << "Landmark face " << i << " took "
+                << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
             shapes.push_back(landmarks);
         }
-        cout << "Predictor took "
-             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
 
         if (shapes.size() == 0) {
             cout << "No landmark found" << endl;
-            continue;
         }
 #endif
 
-#if 0
-        // We can also extract copies of each face that are cropped, rotated upright,
-        // and scaled to a standard size as shown here:
-        dlib::array<dlib::array2d<dlib::rgb_pixel> > face_chips;
-        dlib::extract_image_chips(cimg, dlib::get_face_chip_details(shapes), face_chips);
-        win_faces.set_image(dlib::tile_images(face_chips));
-#endif
-
 #ifdef ALIGN_USE_OPENCV
-        start = clock();
-        // use AffineTransform
+        std::vector<cv::Mat> faces_align;
         cv::Point2f srcTri[3], dstTri[3];
-        srcTri[0] = cv::Point2f( shapes[0].part(36).x(), shapes[0].part(36).y() );
-        srcTri[1] = cv::Point2f( shapes[0].part(45).x(), shapes[0].part(45).y() );
-        srcTri[2] = cv::Point2f( shapes[0].part(33).x(), shapes[0].part(33).y() );
-        cout << "srcTri: ["
-             << srcTri[0].x << ", " << srcTri[0].y << "], [ "
-             << srcTri[1].x << ", " << srcTri[1].y << "], [ "
-             << srcTri[2].x << ", " << srcTri[2].y << "]" << endl;
         // hard-code for 128x128, {36, 45, 33}
         dstTri[0] = cv::Point2f( 24.85209656,   21.66616631 );
         dstTri[1] = cv::Point2f( 100.97396851,  20.24590683 );
         dstTri[2] = cv::Point2f( 63.35371399,   65.84849548 );
 
-        cv::Mat warp_mat = cv::getAffineTransform(srcTri, dstTri);
-        cv::Mat face_warp = cv::Mat::zeros( 128, 128,  frame.type() );
-        cv::warpAffine(frame, face_warp, warp_mat, face_warp.size() );
-        cout << "Align took "
-             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+        for (int i = 0; i < shapes.size(); i++) {
+            // use AffineTransform
+            srcTri[0] = cv::Point2f( shapes[i].part(36).x(), shapes[i].part(36).y() );
+            srcTri[1] = cv::Point2f( shapes[i].part(45).x(), shapes[i].part(45).y() );
+            srcTri[2] = cv::Point2f( shapes[i].part(33).x(), shapes[i].part(33).y() );
+            //cout << "srcTri: ["
+            //     << srcTri[0].x << ", " << srcTri[0].y << "], [ "
+            //     << srcTri[1].x << ", " << srcTri[1].y << "], [ "
+            //     << srcTri[2].x << ", " << srcTri[2].y << "]" << endl;
+
+            start = clock();
+            cv::Mat warp_mat = cv::getAffineTransform(srcTri, dstTri);
+#ifdef FACE_USE_GRAY
+            cv::Mat face_warp = cv::Mat::zeros( 128, 128, frame_gray.type() );
+            cv::warpAffine(frame_gray, face_warp, warp_mat, face_warp.size() );
+#else
+            cv::Mat face_warp = cv::Mat::zeros( 128, 128,  frame.type() );
+            cv::warpAffine(frame, face_warp, warp_mat, face_warp.size() );
+#endif
+            faces_align.push_back(face_warp);
+            cout << "Align face " << i << " took "
+                << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+        }
 #endif
 
 #ifdef FEATURE_USE_MXNET
-        GetImage(face_warp, mx_input_data.data());
-        start = clock();
-        mx_forward();
-        cout << "Forward took "
-             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
-#if 0
-        cout << "output size = " << mx_output_data.size() << endl;
-        for (int i = 0; i < mx_output_data.size(); i++) {
-            cout << mx_output_data[i] << " ";
-        }
-        cout << endl;
+        std::vector<std::vector<float> > face_reps;
+        for (int i = 0; i < faces_align.size(); i++) {
+            cv::Mat face_gray;
+#ifdef FACE_USE_GRAY
+            face_gray = faces_align[i];
+#else
+            cv::cvtColor(faces_align[i], face_gray, cv::COLOR_BGR2GRAY);
 #endif
+            std::vector<float> mx_input_data = mx_get_image(face_gray);
+            start = clock();
+            std::vector<float> mx_output_data = mx_forward(mx_predictor,
+                mx_input_data, mx_input_size, mx_output_size);
+            cout << "Forward face " << i << " took "
+                << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+#if 0
+            cout << "output size = " << mx_output_data.size() << endl;
+            for (int j = 0; j < mx_output_data.size(); j++) {
+                cout << mx_output_data[j] << " ";
+            }
+            cout << endl;
+#endif
+            face_reps.push_back(mx_output_data);
+        }
 #endif
 
 #ifdef CLASSIFIER_USE_NAIVE
-        start = clock();
-        int id0 = find_nearest_face();
-        int id1 = find_nearest_face_norm();
-        int id2 = find_nearest_face_substract_norm();
-        int id = id1;
-        cout << "Classifier took "
-             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
-        cout << "Best Match is " << id << " name " << name[id] << endl;
+        std::vector<int> face_ids;
+        std::vector<std::string> face_names;
+        for (int i = 0; i < face_reps.size(); i++) {
+            start = clock();
+            int id0 = find_nearest_face(face_reps[i]);
+            int id1 = find_nearest_face_norm(face_reps[i]);
+            int id2 = find_nearest_face_substract_norm(face_reps[i]);
+            int id = id1;
+            cout << "Classifier face " << i << " took "
+                << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+            cout << "Face " << i << " Best Match is " << id
+                << " name " << name[id] << endl;
+            face_ids.push_back(id);
+            face_names.push_back(name[id]);
+        }
 #endif
 
-        start = clock();
 #ifdef DISPLAY_USE_OPENCV
-        render_face( frame, shapes[0] );
-        cv::rectangle( frame, cv_faces[0], cv::Scalar(0,255,0), 1, 16 );
+        start = clock();
+        cv::Mat face_show;
+        for (int i = 0; i < shapes.size(); i++) {
+            render_face( frame, shapes[i] );
+            cv::rectangle( frame, cv_faces[i], cv::Scalar(0,255,0), 1, 16 );
+            cv::Mat face_align = faces_align[i];
+            cv::putText( face_align, face_names[i], cv::Point(5, 80),
+                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255,255,0), 2 );
+            if (i==0) {
+                face_show = face_align;
+            } else {
+                cv::vconcat(face_show, face_align, face_show);
+            }
+        }
         cv::imshow( "Image", frame );
-        cv::putText( face_warp, name[id], cv::Point(5, 80),
-            cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255,255,0), 2 );
-        cv::imshow( "Face", face_warp );
+        if (shapes.size())
+            cv::imshow( "Faces", face_show );
         // waitKey is must for display
         int key = cv::waitKey(30) & 0xFF;  // trigger display and hold for 30ms
-        cout << "key = " << key << endl;
+        //cout << "key = " << key << endl;
         if (key == 27 || key == 'q') {
             finish = 1;
         }
+        cout << "CV Display took "
+             << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
 #elif defined(DISPLAY_USE_DLIB)
-        // Display it all on the screen
+        start = clock();
+
         win.clear_overlay();
         win.set_image(cimg);
         win.add_overlay(faces);
         win.add_overlay(render_face_detections(shapes));
-
-        dlib::cv_image<dlib::bgr_pixel> cimg_face_align(face_warp);
-        win_faces.set_image(cimg_face_align);
-        const dlib::rectangle r;
-        win_faces.add_overlay(r, dlib::rgb_pixel(255,0,0), name[id]);
+        // We can also extract copies of each face that are cropped, rotated upright,
+        // and scaled to a standard size as shown here:
+        dlib::array<dlib::array2d<dlib::rgb_pixel> > face_chips;
+        dlib::extract_image_chips(cimg, dlib::get_face_chip_details(shapes), face_chips);
+        win_faces.set_image(dlib::tile_images(face_chips));
+        //dlib::cv_image<dlib::bgr_pixel> cimg_face_align(face_warp);
+        //win_faces.set_image(cimg_face_align);
+        for (int i = 0; i < face_ids.size(); i++) {
+            const dlib::rectangle r;
+            win_faces.add_overlay(r, dlib::rgb_pixel(255,0,0), face_names[i]);
+        }
         if (win.is_closed() || win_faces.is_closed()) {
             finish = 1;
         }
-#endif
-        cout << "Display took "
+        cout << "DLIB Display took "
              << double(clock() - start) / CLOCKS_PER_SEC << " sec." << endl;
+#endif
     }
 
 #ifdef DISPLAY_USE_OPENCV
     cv::destroyAllWindows();
 #endif
 #ifdef FEATURE_USE_MXNET
-    mx_cleanup();
+    mx_cleanup(mx_predictor);
 #endif
 #ifdef DETECT_USE_CCV
     ccv_scd_classifier_cascade_free(cascade);
 #endif
+
     return 0;
 }
 
