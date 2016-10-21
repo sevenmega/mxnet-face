@@ -15,6 +15,8 @@ python classifier.py --feature 1 \
     --feature-prefix $feature_path \
     --model-prefix $model_prefix \
     --epoch $epoch
+python classifier.py --msgpack 1 \
+    --feature-prefix $feature_path
 python classifier.py --train 1 \
     --classifier-prefix $classifier_path \
     --feature-prefix $feature_path
