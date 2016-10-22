@@ -20,5 +20,21 @@ Add followings in blacklist
     'mxnet/mkl_memory.h'
 $ make
 Don't use the latest one ...
+libmxnet_predict.a and mxnet_predict-all.cc are in amalgamation
 
+3. ccv
+$ git clone https://github.com/liuliu/ccv.git
+$ cd ccv
+$ cd lib
+$ ./configure  (got config.mk)
+$ make
+libccv.a is in lib
+
+4. msgpack
+$ git clone https://github.com/msgpack/msgpack-c.git
+$ mkdir build
+$ cd build
+$ cmake ..
+$ make
+libmsgpackc.so is in build
 
