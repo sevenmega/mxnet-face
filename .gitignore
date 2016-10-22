@@ -4,7 +4,6 @@ data/*.zip
 data/lfw-align
 data/lfw-feature
 data/classifier
-data/feature
 src/cam
 test_mxnet/image-classification-predict
 test_opencv/test
