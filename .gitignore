@@ -1,6 +1,7 @@
 *.pyc
 model/dlib
 data/*.zip
+data/my-raw
 data/lfw-align
 data/lfw-feature
 data/classifier

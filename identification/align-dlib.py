@@ -26,7 +26,7 @@ import openface.helper
 from openface.data import iterImgs
 
 fileDir = os.path.dirname(os.path.realpath(__file__))
-modelDir = os.path.join(fileDir, '..', 'models')
+modelDir = os.path.join(fileDir, '..', 'model')
 dlibModelDir = os.path.join(modelDir, 'dlib')
 openfaceModelDir = os.path.join(modelDir, 'openface')
 
