@@ -9,17 +9,9 @@ libdlib.so is in dlib/build
 
 2. mxnet
 $ git clone --recursive https://github.com/dmlc/mxnet.git
+$ git checkout ae3b210b9b  # checkout the version before the mkl patch was in
 $ cd amalgamation/
-$ vim amalgamation.py
-Add followings in blacklist
-    'mkl/mkl_batch_norm-inl.h', 'mkl/mkl_concat-inl.h',
-    'mkl/mkl_convolution-inl.h', 'mkl/mkl_elementwise-inl.h',
-    'mkl/mkl_fully_connected-inl.h', 'mkl/mkl_lrn-inl.h',
-    'mkl/mkl_memory-inl.h', 'mkl/mkl_pooling-inl.h',
-    'mkl/mkl_relu-inl.h', 'mkl_vml_functions.h',
-    'mxnet/mkl_memory.h'
 $ make
-Don't use the latest one ...
 libmxnet_predict.a and mxnet_predict-all.cc are in amalgamation
 
 3. ccv
