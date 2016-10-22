@@ -212,11 +212,10 @@ def save_msgpack(args):
     # if the name is the same, therefore always the last rep is kept
     dictionary = dict(zip(labels, embeddings))
     # print dictionary
-    packed = mp.packb(dictionary, default=encode)
     fmp = "{}/feature_db.mp".format(args.feature_prefix)
     with open(fmp, 'w') as fmpout:
-        fmpout.write(packed)
-    #with open("mp_data", 'r') as fmpin:
+		mp.pack(dictionary, fmpout, default=encode)
+    #with open(fmp, 'r') as fmpin:
     #    unpacked = mp.unpack(fmpin, object_hook=decode)
     #    print unpacked
 
