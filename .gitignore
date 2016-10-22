@@ -7,3 +7,5 @@ data/classifier
 data/feature
 src/cam
 test_mxnet/image-classification-predict
+test_opencv/test
+
